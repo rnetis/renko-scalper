@@ -31,10 +31,24 @@ profiles:
   day:   {enabled: true, ltf: 5m, htf: 15m, ltf_atr_mult: 1.0, htf_atr_mult: 1.0, max_age_candles: 2, max_stop_bricks: 4.0, tp1_r: 1.0, max_hold_candles: 144}
 
 alerts:
+  paper: true                    # every alert is tagged [PAPER]. Set false ONLY after `validate` returns GO
   min_score: 70                  # 80+ = grade A
   watch_min_score: 50            # near-misses shown in the app's Watchlist
   top_n: 3                       # max new alerts per scan
   cooldown_min: {scalp: 15, day: 60}
+
+guard:                           # circuit breakers: they only ever suppress alerts
+  enabled: true
+  max_active: 3                  # signals open at once
+  max_same_side: 2               # alts are correlated - do not stack the same direction
+  daily_loss_limit_r: 3.0        # no new alerts for the rest of the UTC day after -3R
+  consecutive_losses: 3          # 3 stops in a row ...
+  pause_min: 60                  # ... pauses alerts for an hour
+
+watchdog:                        # dead-man's switch
+  fail_cycles: 4                 # ~2 min blind -> urgent "scanner BLIND" alert (and "recovered" later)
+  ping_url: ""                   # healthchecks.io / Uptime-Kuma push URL, pinged after each healthy cycle:
+                                 # if the whole server dies, THEY alert you (the process cannot)
 
 scan:
   interval_sec: 30
@@ -47,7 +61,7 @@ notify:
 api:
   host: 0.0.0.0
   port: 8787
-  token: change-me               # the iOS app sends this as a Bearer token
+  token: ""                      # REQUIRED, >=16 chars (the server refuses to start otherwise). python -c "import secrets;print(secrets.token_urlsafe(32))"
 
 storage:
   db_path: data/signals.db

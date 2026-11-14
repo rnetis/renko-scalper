@@ -3,10 +3,13 @@ from __future__ import annotations
 import logging
 import threading
 import time
+
+import requests
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
-from .config import INTERVAL_MS
+from .config import FETCH_LIMIT, INTERVAL_MS
+from .guard import RiskGuard
 from .indicators import atr, resample
 from .models import MarketInfo, Profile, Setup
 from .notify import Dispatcher, event_message, signal_message
@@ -15,12 +18,9 @@ from .risk import size_position
 from .store import Store
 from .strategy import evaluate, infer_tick
 from .toobit import ToobitClient, closed_only
-from .trade import TradeState, advance, new_trade
+from .trade import TradeState, advance, new_trade, time_exit
 
 log = logging.getLogger("renko.scanner")
-
-FETCH_LIMIT = {"1m": 720, "5m": 500, "15m": 400}
-
 
 def build_profiles(cfg) -> dict:
     out = {}
@@ -53,6 +53,15 @@ class Scanner:
         self.last_scan_ms = 0
         self.last_error = ""
         self.cycles = 0
+        self.guard = RiskGuard(cfg.guard)
+        self.guard_reason = ""
+        self._guard_told = ""
+        self.bad_cycles = 0
+        self.degraded = False
+        self.last_ok_ms = 0
+        self._cycle_ok = 0
+        self._cycle_bad = 0
+        self._last_ping = 0.0
 
     # ------------------------------------------------------------------ data
     def refresh_universe(self, force: bool = False) -> None:
@@ -116,15 +125,25 @@ class Scanner:
         mkt = self.info[sym]
         if mkt.tick <= 0:
             mkt.tick = 0.0
+        ok = True
         for prof in self.profiles.values():
             try:
                 ltf, htf = self.series_for(sym, prof)
+                # a halted market or a stuck API must count as "blind", not as "no setups"
+                if not ltf or time.time() * 1000 - (ltf[-1].ts + prof.ltf_ms) > 6 * prof.ltf_ms:
+                    raise RuntimeError("stale or empty candles")
                 s = evaluate(sym, ltf, htf, prof, mkt, self.cfg, self.sizes)
                 if s:
                     out.append(s)
             except Exception as e:  # noqa: BLE001
+                ok = False
                 self.last_error = f"{sym}: {e}"
                 log.debug("scan %s failed: %s", sym, e)
+        with self._lock:
+            if ok:
+                self._cycle_ok += 1
+            else:
+                self._cycle_bad += 1
         return out
 
     def _sizing(self, s: Setup) -> Optional[dict]:
@@ -138,6 +157,8 @@ class Scanner:
         return d
 
     def scan_once(self) -> list:
+        with self._lock:
+            self._cycle_ok = self._cycle_bad = 0
         self.refresh_universe()
         self._apply_books()
         with ThreadPoolExecutor(max_workers=6) as ex:
@@ -150,7 +171,42 @@ class Scanner:
             self.cycles += 1
         self._alert(setups)
         self.track()
+        total = self._cycle_ok + self._cycle_bad
+        self._record_cycle(total > 0 and self._cycle_ok / total >= 0.5)
         return setups
+
+    # ------------------------------------------------------------------ dead-man's switch
+    def _record_cycle(self, healthy: bool) -> None:
+        w = self.cfg.watchdog
+        if healthy:
+            self.bad_cycles = 0
+            self.last_ok_ms = int(time.time() * 1000)
+            if self.degraded:
+                self.degraded = False
+                self.out.send("✅ Scanner recovered",
+                              "Market data is flowing again. Re-check every open position against the app.", "high")
+            self._ping()
+            return
+        self.bad_cycles += 1
+        if self.bad_cycles >= int(w.fail_cycles) and not self.degraded:
+            self.degraded = True
+            n = len(self.store.list(limit=200, status="active"))
+            self.out.send("⚠️ Scanner BLIND - no fresh market data",
+                          f"{n} tracked signal(s) are NOT being monitored and no new setups will arrive. "
+                          "Manage open positions yourself; rely on the stop orders on the exchange.", "urgent")
+
+    def _ping(self) -> None:
+        url = getattr(self.cfg.watchdog, "ping_url", "")
+        if not url or time.time() - self._last_ping < 60:
+            return
+        self._last_ping = time.time()
+        try:
+            requests.get(url, timeout=5)
+        except Exception as e:  # noqa: BLE001
+            log.warning("heartbeat ping failed: %s", e)
+
+    def _tag(self, title: str) -> str:
+        return "[PAPER] " + title if self.cfg.alerts.paper else title
 
     # ------------------------------------------------------------------ alerts
     def _alert(self, setups: list) -> None:
@@ -163,6 +219,14 @@ class Scanner:
             cool = getattr(al.cooldown_min, s.style, 15) * 60_000
             if now_ms - self.store.last_created_ms(s.symbol, s.style) < cool:
                 continue
+            why = self.guard.blocked(self.store, s.side, now_ms)
+            self.guard_reason = why or ""
+            if why:
+                if why != self._guard_told:  # tell the user once per state, not once per scan
+                    self._guard_told = why
+                    self.out.send(self._tag("🚧 New alerts paused"), why, "default")
+                continue
+            self._guard_told = ""
             p = self._payload(s)
             tr = new_trade(s.side, s.entry, s.stop, s.tp1, s.brick_ltf, self.cfg.fees.taker_pct)
             tr.last_ts = s.ts
@@ -171,7 +235,7 @@ class Scanner:
                 continue
             p["id"] = sid
             title, body = signal_message(p)
-            self.out.send(title, body, "high" if s.score >= 80 else "default")
+            self.out.send(self._tag(title), body, "high" if s.score >= 80 else "default")
             sent += 1
 
     # ------------------------------------------------------------------ lifecycle tracking
@@ -189,7 +253,7 @@ class Scanner:
                     if c.ts > st.last_ts and st.status != "closed":
                         events += advance(st, c)
                 if st.status != "closed" and st.bars >= p.get("max_hold_candles", 90):
-                    st.status, st.exit_reason = "closed", "expired"
+                    time_exit(st, cs[-1].c if cs else st.entry)
                     events.append("expired")
                 if events:
                     status = "expired" if "expired" in events else st.status if st.status != "closed" else st.exit_reason
@@ -197,7 +261,7 @@ class Scanner:
                     for ev in events:
                         m = event_message(p, ev, st.to_dict())
                         if m:
-                            self.out.send(*m)
+                            self.out.send(self._tag(m[0]), *m[1:])
                 elif st.last_ts != t.get("last_ts"):
                     self.store.update(row["id"], row["status"], st.to_dict())
             except Exception as e:  # noqa: BLE001
@@ -232,4 +296,5 @@ class Scanner:
             except Exception as e:  # noqa: BLE001
                 self.last_error = str(e)
                 log.exception("scan cycle failed")
+                self._record_cycle(False)
             stop.wait(max(1.0, self.cfg.scan.interval_sec - (time.time() - t0)))

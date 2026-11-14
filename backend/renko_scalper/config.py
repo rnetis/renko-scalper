@@ -36,11 +36,23 @@ DEFAULTS: dict = {
                 "max_age_candles": 2, "max_stop_bricks": 4.0, "tp1_r": 1.0, "max_hold_candles": 144},
     },
     "alerts": {
+        "paper": True,  # tag every alert [PAPER]; set false only after `validate` says GO
         "min_score": 70,
         "watch_min_score": 50,
         "top_n": 3,
         "cooldown_min": {"scalp": 15, "day": 60},
     },
+    # Account-level circuit breakers: new alerts are suppressed while any of these trips.
+    "guard": {
+        "enabled": True,
+        "max_active": 3,  # tracked signals open at once
+        "max_same_side": 2,  # crypto alts are highly correlated: do not stack the same direction
+        "daily_loss_limit_r": 3.0,  # stop for the UTC day after losing this many R
+        "consecutive_losses": 3,  # N losers in a row ...
+        "pause_min": 60,  # ... pauses new alerts for this long
+    },
+    # Dead-man's switch: tells you when the scanner cannot see the market, so you never trust silence.
+    "watchdog": {"fail_cycles": 4, "ping_url": ""},  # ping_url: healthchecks.io-style URL, hit after each good cycle
     "scan": {"interval_sec": 30},
     "notify": {
         "console": True,
@@ -62,6 +74,7 @@ _ENV = {
     "RS_NTFY_TOPIC": ("notify", "ntfy", "topic"),
     "RS_NTFY_TOKEN": ("notify", "ntfy", "token"),
     "RS_DB": ("storage", "db_path"),
+    "RS_PING_URL": ("watchdog", "ping_url"),
 }
 
 
@@ -98,6 +111,21 @@ def load_config(path: Optional[str] = None) -> SimpleNamespace:
             val = float(val)
         node[keys[-1]] = val
     return _ns(data)
+
+
+# candles fetched per interval; shared by the live scanner and the backtester so they see the same window
+FETCH_LIMIT = {"1m": 720, "5m": 500, "15m": 400}
+
+INSECURE_TOKENS = {"", "change-me", "changeme", "secret", "token", "password"}
+
+
+def assert_safe_token(token: str) -> None:
+    """Refuse to expose the API with a placeholder/short token."""
+    if (token or "").strip().lower() in INSECURE_TOKENS or len(token or "") < 16:
+        raise SystemExit(
+            "Refusing to start the API: set a strong api.token (>=16 chars) in config.yaml or RS_API_TOKEN.\n"
+            "  generate one:  python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+        )
 
 
 INTERVAL_MS = {"1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000}

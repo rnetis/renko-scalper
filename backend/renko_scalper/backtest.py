@@ -11,12 +11,12 @@ import math
 import time
 from typing import Optional
 
-from .config import INTERVAL_MS
+from .config import FETCH_LIMIT, INTERVAL_MS
 from .indicators import resample
 from .models import MarketInfo, Profile
 from .renko import StableSizes
 from .strategy import evaluate
-from .trade import advance, new_trade
+from .trade import advance, new_trade, time_exit
 
 
 def fetch_history(client, symbol: str, interval: str, days: float) -> list:
@@ -36,7 +36,9 @@ def fetch_history(client, symbol: str, interval: str, days: float) -> list:
 
 
 def run_backtest(symbol: str, candles: list, prof: Profile, mkt: MarketInfo, cfg, warmup: int = 300,
-                 window: int = 600) -> list:
+                 window: Optional[int] = None) -> list:
+    # same candle window the live scanner sees: Renko is path dependent, so a different window = different bricks
+    window = window or FETCH_LIMIT.get(prof.base_interval, 500)
     sizes = StableSizes()
     trades: list = []
     i = warmup
@@ -60,15 +62,14 @@ def run_backtest(symbol: str, candles: list, prof: Profile, mkt: MarketInfo, cfg
         while j < n and st.status != "closed":
             advance(st, candles[j])
             if st.status != "closed" and st.bars >= prof.max_hold_candles:
-                px = candles[j].c
-                r_unit = st._unit_r(px)
-                st.result_r = (0.5 * st.unit1_r + 0.5 * r_unit) if st.tp1_hit else r_unit
-                st.status, st.exit_reason = "closed", "time_exit"
+                time_exit(st, candles[j].c)
             j += 1
         if st.status != "closed":
             break  # data ended mid-trade
         trades.append({"symbol": symbol, "style": prof.name, "side": s.side_name, "ts": nxt.ts, "score": s.score,
-                       "r": st.result_r, "bars": st.bars, "reason": st.exit_reason, "tp1": st.tp1_hit})
+                       "r": st.result_r, "bars": st.bars, "reason": st.exit_reason, "tp1": st.tp1_hit,
+                       # round-trip fees expressed in R, so fee stress can be applied without re-running
+                       "fee_r": 2.0 * fee / 100.0 * nxt.o / st.r_dist})
         i = max(j, i + 1)
     return trades
 

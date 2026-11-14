@@ -80,3 +80,10 @@ class Store:
             r = self._conn.execute(
                 "SELECT MAX(created_ms) m FROM signals WHERE symbol=? AND style=?", (symbol, style)).fetchone()
         return int(r["m"] or 0)
+
+    def closed(self, limit: int = 200) -> list:
+        """Most recent finished trades (any exit reason), newest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM signals WHERE status NOT IN ('open','tp1') ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [self._row(r) for r in rows]

@@ -70,6 +70,7 @@ def signal_message(p: dict) -> tuple:
     lines.append("Why: " + " · ".join(p["reasons"]))
     if p["warnings"]:
         lines.append("⚠ " + " · ".join(p["warnings"]))
+    lines.append("Place the STOP as a real exchange order the moment you enter - this tool only tracks, it cannot protect you.")
     lines.append("Valid for ~3 candles. Decision support, not advice - you own the trade.")
     return title, "\n".join(lines)
 
@@ -84,5 +85,7 @@ def event_message(p: dict, ev: str, trade: dict) -> Optional[tuple]:
     if ev == "runner_exit":
         return (f"🏁 Runner closed: {sym}", f"Blended result ≈ {trade['result_r']:.2f}R.")
     if ev == "expired":
-        return (f"⌛ Expired: {sym}", "Max holding time reached - reassess or exit manually.")
+        r = trade.get("result_r")
+        tail = f" Marked at ≈ {r:.2f}R." if r is not None else ""
+        return (f"⌛ Expired: {sym}", "Max holding time reached - exit or reassess." + tail)
     return None

@@ -36,9 +36,16 @@ def create_app(scanner: Scanner) -> FastAPI:
 
     @app.get("/api/v1/health")
     def health():
-        return {"ok": True, "cycles": scanner.cycles, "last_scan_ts": scanner.last_scan_ms,
-                "symbols": len(scanner.universe), "last_error": scanner.last_error,
+        # unauthenticated: only what a load balancer / uptime monitor needs
+        return {"ok": not scanner.degraded, "degraded": scanner.degraded, "last_scan_ts": scanner.last_scan_ms,
                 "server_time": int(time.time() * 1000)}
+
+    @app.get("/api/v1/status", dependencies=[Depends(auth)])
+    def status():
+        return {"cycles": scanner.cycles, "symbols": len(scanner.universe), "last_scan_ts": scanner.last_scan_ms,
+                "last_ok_ts": scanner.last_ok_ms, "bad_cycles": scanner.bad_cycles, "degraded": scanner.degraded,
+                "guard_pause": scanner.guard_reason, "paper": bool(cfg.alerts.paper),
+                "last_error": scanner.last_error, "server_time": int(time.time() * 1000)}
 
     @app.get("/api/v1/signals", dependencies=[Depends(auth)])
     def signals(since_id: int = 0, limit: int = Query(30, le=200), status: Optional[str] = None):

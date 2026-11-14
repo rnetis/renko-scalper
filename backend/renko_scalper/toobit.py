@@ -26,18 +26,43 @@ def _f(x, default=0.0) -> float:
 
 
 class ToobitClient:
-    def __init__(self, base_url: str = "https://api.toobit.com", proxy: Optional[str] = None, timeout: float = 10.0):
+    RETRY_STATUS = (429, 500, 502, 503, 504)
+
+    def __init__(self, base_url: str = "https://api.toobit.com", proxy: Optional[str] = None, timeout: float = 10.0,
+                 retries: int = 2):
         self.base = base_url.rstrip("/")
         self.timeout = timeout
+        self.retries = retries
         self.s = requests.Session()
         self.s.headers["User-Agent"] = "renko-scalper/1.0"
         if proxy:
             self.s.proxies = {"http": proxy, "https": proxy}
 
     def _get(self, path: str, params: Optional[dict] = None):
-        r = self.s.get(self.base + path, params=params, timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        """GET with retry/backoff on 429/5xx/timeouts (honours Retry-After). Raises the last error."""
+        last: Optional[Exception] = None
+        for attempt in range(self.retries + 1):
+            delay = 0.5 * 2 ** attempt
+            try:
+                r = self.s.get(self.base + path, params=params, timeout=self.timeout)
+                if r.status_code in self.RETRY_STATUS and attempt < self.retries:
+                    ra = r.headers.get("Retry-After", "")
+                    delay = float(ra) if ra.replace(".", "", 1).isdigit() else delay
+                    last = requests.HTTPError(f"{r.status_code} from {path}", response=r)
+                else:
+                    r.raise_for_status()
+                    return r.json()
+            except (requests.ConnectionError, requests.Timeout) as e:
+                last = e
+                if attempt >= self.retries:
+                    raise
+            time.sleep(min(delay, 10.0))
+        raise last  # pragma: no cover
+
+    def server_time(self) -> Optional[int]:
+        data = self._get("/api/v1/time")
+        v = data.get("serverTime") if isinstance(data, dict) else None
+        return int(v) if v else None
 
     # ------------------------------------------------------------------ metadata
     def contracts(self) -> dict:
@@ -82,9 +107,17 @@ class ToobitClient:
         ms = INTERVAL_MS[interval]
         end = end_ms if end_ms is not None else int(time.time() * 1000)
         start = start_ms if start_ms is not None else end - limit * ms
-        rows = self._get("/quote/v1/klines", {
-            "symbol": symbol, "interval": interval, "startTime": start, "endTime": end, "limit": min(limit, 1000),
-        })
+        params = {"symbol": symbol, "interval": interval, "startTime": start, "endTime": end,
+                  "limit": min(limit, 1000)}
+        try:
+            rows = self._get("/quote/v1/klines", params)
+        except requests.HTTPError as e:
+            # some Toobit kline endpoints name the window from/to instead of startTime/endTime
+            if getattr(e.response, "status_code", 0) != 400:
+                raise
+            alt = {k: v for k, v in params.items() if k not in ("startTime", "endTime")}
+            alt.update({"from": start, "to": end})
+            rows = self._get("/quote/v1/klines", alt)
         return parse_klines(rows)
 
 

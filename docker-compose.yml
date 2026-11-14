@@ -2,7 +2,9 @@ services:
   renko-scalper:
     build: ./backend
     restart: unless-stopped
-    ports: ["8787:8787"]          # put HTTPS (Caddy / Cloudflare Tunnel) in front for the iOS app
+    # localhost-only by default; put HTTPS (Caddy / Cloudflare Tunnel) in front for the iOS app.
+    # LAN-only testing: RS_BIND=0.0.0.0 docker compose up -d
+    ports: ["${RS_BIND:-127.0.0.1}:8787:8787"]
     volumes:
       - ./backend/config.yaml:/config/config.yaml:ro
       - renko-data:/data

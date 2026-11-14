@@ -101,3 +101,10 @@ def advance(st: TradeState, c: Candle) -> list:
         # trail updates are silent; the current stop is exposed through the API
     st.events.extend(ev)
     return ev
+
+
+def time_exit(st: TradeState, px: float) -> None:
+    """Close a trade at `px` because max holding time elapsed (same maths live and in the backtest)."""
+    r_unit = st._unit_r(px)
+    st.result_r = (0.5 * st.unit1_r + 0.5 * r_unit) if st.tp1_hit else r_unit
+    st.status, st.exit_reason = "closed", "time_exit"
