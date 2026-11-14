@@ -1,0 +1,53 @@
+# Copy to backend/config.yaml and run:  python -m renko_scalper -c config.yaml serve
+# Secrets can also come from env vars: RS_API_TOKEN, RS_TG_TOKEN, RS_TG_CHAT, RS_TG_PROXY,
+# RS_NTFY_TOPIC, RS_NTFY_SERVER, RS_NTFY_TOKEN, RS_PROXY, RS_EQUITY.
+
+exchange:
+  base_url: https://api.toobit.com
+  proxy: null            # e.g. socks5h://127.0.0.1:1080 if Toobit needs a proxy from your server
+
+universe:
+  max_symbols: 40                # top-N USDT-M perpetuals by 24h volume
+  min_quote_volume_usdt: 20000000
+  exclude: []
+  include_only: []               # e.g. [BTC-SWAP-USDT, ETH-SWAP-USDT, SOL-SWAP-USDT]
+
+account:
+  equity_usdt: 1000              # used only to size suggestions - no API keys are ever needed
+  risk_per_trade_pct: 1.0        # Miner: never above 3% per trade (hard-capped in code)
+  max_leverage: 20
+
+fees:                            # check your VIP tier; costs are assumed taker both ways
+  taker_pct: 0.06
+  maker_pct: 0.02
+
+filters:
+  max_spread_pct: 0.05
+  min_move_cost_multiple: 3.0    # Day Trader's Bible: expected move must dwarf costs (4-10x is stricter)
+  allow_extended_trend: true     # allow trend entries when HTF stochastic is pinned overbought/oversold
+
+profiles:
+  scalp: {enabled: true, ltf: 1m, htf: 5m,  ltf_atr_mult: 1.0, htf_atr_mult: 1.0, max_age_candles: 2, max_stop_bricks: 4.0, tp1_r: 1.0, max_hold_candles: 90}
+  day:   {enabled: true, ltf: 5m, htf: 15m, ltf_atr_mult: 1.0, htf_atr_mult: 1.0, max_age_candles: 2, max_stop_bricks: 4.0, tp1_r: 1.0, max_hold_candles: 144}
+
+alerts:
+  min_score: 70                  # 80+ = grade A
+  watch_min_score: 50            # near-misses shown in the app's Watchlist
+  top_n: 3                       # max new alerts per scan
+  cooldown_min: {scalp: 15, day: 60}
+
+scan:
+  interval_sec: 30
+
+notify:
+  console: true
+  telegram: {token: "", chat_id: "", proxy: null}   # proxy e.g. socks5h://127.0.0.1:1080
+  ntfy: {server: https://ntfy.sh, topic: "", token: ""}
+
+api:
+  host: 0.0.0.0
+  port: 8787
+  token: change-me               # the iOS app sends this as a Bearer token
+
+storage:
+  db_path: data/signals.db

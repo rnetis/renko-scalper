@@ -1,0 +1,29 @@
+name: Build iOS IPA
+
+on:
+  push:
+    branches: [main]
+    paths: ["ios/**", "scripts/build_ipa.sh", ".github/workflows/ios-ipa.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build unsigned IPA
+        run: ./scripts/build_ipa.sh
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: RenkoScalper-unsigned-ipa
+          path: build/RenkoScalper.ipa
+          if-no-files-found: error
+      - name: Upload build log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: build/xcodebuild.log

@@ -1,0 +1,45 @@
+name: RenkoScalper
+options:
+  bundleIdPrefix: app.renkoscalper
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+targets:
+  RenkoScalper:
+    type: application
+    platform: iOS
+    sources:
+      - path: RenkoScalper
+        excludes: ["Info.plist"]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.renkoscalper.ios
+        PRODUCT_NAME: RenkoScalper
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: NO
+    info:
+      path: RenkoScalper/Info.plist
+      properties:
+        CFBundleDisplayName: Renko Scalper
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIBackgroundModes: [fetch]
+        BGTaskSchedulerPermittedIdentifiers: [app.renkoscalper.refresh]
+        ITSAppUsesNonExemptEncryption: false
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true   # your own server may be plain http; prefer HTTPS via a tunnel
+schemes:
+  RenkoScalper:
+    build:
+      targets:
+        RenkoScalper: all
+    archive:
+      config: Release

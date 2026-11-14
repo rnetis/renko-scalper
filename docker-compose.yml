@@ -1,0 +1,10 @@
+services:
+  renko-scalper:
+    build: ./backend
+    restart: unless-stopped
+    ports: ["8787:8787"]          # put HTTPS (Caddy / Cloudflare Tunnel) in front for the iOS app
+    volumes:
+      - ./backend/config.yaml:/config/config.yaml:ro
+      - renko-data:/data
+volumes:
+  renko-data:

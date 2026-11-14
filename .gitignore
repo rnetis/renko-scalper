@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+backend/config.yaml
+backend/data/
+*.db
+build/
+ios/RenkoScalper.xcodeproj/
+ios/RenkoScalper/Info.plist
+.DS_Store
